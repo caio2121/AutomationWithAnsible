@@ -1,0 +1,212 @@
+---
+- name: Instalação e Configuração do Bacula Director e Baculum
+  hosts: definaohost
+  become: yes
+  tasks:
+
+    - name: Atualizar repositórios e instalar dependências
+      apt:
+        update_cache: yes
+        name:
+          - build-essential
+          - zlib1g-dev
+          - pbzip2
+          - libpq-dev
+          - postgresql
+          - postgresql-client
+          - wget
+          - tar
+        state: present
+
+    - name: Baixar o Bacula versão 15.0.2
+      get_url:
+        url: "https://sinalbr.dl.sourceforge.net/project/bacula/bacula/15.0.2/bacula-15.0.2.tar.gz"
+        dest: "/usr/src/bacula-15.0.2.tar.gz"
+
+    - name: Descompactar o Bacula
+      unarchive:
+        src: "/usr/src/bacula-15.0.2.tar.gz"
+        dest: "/usr/src/"
+        remote_src: yes
+
+    - name: Configurar o Bacula Director
+      command: |
+        ./configure \
+        --with-postgresql \
+        --with-readline=/usr/include/readline \
+        --disable-conio \
+        --bindir=/usr/bin \
+        --sbindir=/usr/sbin \
+        --with-scriptdir=/etc/bacula/scripts \
+        --with-working-dir=/var/lib/bacula \
+        --with-logdir=/var/log \
+        --with-plugindir=/usr/lib/bacula \
+        --enable-smartalloc \
+        --enable-build-fd=no \
+        --enable-build-stored=no
+      args:
+        chdir: "/usr/src/bacula-15.0.2"
+
+    - name: Compilar e instalar o Bacula Director
+      make:
+        chdir: "/usr/src/bacula-15.0.2"
+        target: ""
+        jobs: "{{ ansible_processor_cores | default(2) }}"
+
+    - name: Instalar o Bacula Director
+      command: make install
+      args:
+        chdir: "/usr/src/bacula-15.0.2"
+
+    - name: Instalar o autostart do Bacula
+      command: make install-autostart
+      args:
+        chdir: "/usr/src/bacula-15.0.2"
+
+    - name: Criar o usuário Bacula
+      user:
+        name: bacula
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Configurar PostgreSQL para Bacula
+      block:
+        - name: Garantir que o usuário postgres está no grupo root
+          command: gpasswd -a postgres root
+
+        - name: Garantir que o usuário Bacula está no grupo root
+          command: gpasswd -a bacula root
+
+        - name: Criar banco de dados e usuário Bacula
+          postgresql_user:
+            name: bacula
+            password: "mudar123"
+            role_attr_flags: SUPERUSER
+
+        - name: Executar os scripts de configuração do banco de dados Bacula
+          command: "{{ item }}"
+          with_items:
+            - /etc/bacula/scripts/create_postgresql_database
+            - /etc/bacula/scripts/make_postgresql_tables
+            - /etc/bacula/scripts/grant_postgresql_privileges
+          become_user: bacula
+
+    - name: Substituir 'peer' por 'md5' no pg_hba.conf
+      lineinfile:
+        path: /etc/postgresql/13/main/pg_hba.conf
+        regexp: 'peer'
+        line: 'md5'
+        backrefs: yes
+
+    - name: Reiniciar o PostgreSQL
+      service:
+        name: postgresql
+        state: restarted
+
+    - name: Garantir permissões nos diretórios e arquivos do Bacula
+      file:
+        path: "{{ item }}"
+        owner: bacula
+        group: bacula
+        recurse: yes
+      with_items:
+        - /etc/bacula
+        - /var/lib/bacula
+        - /var/log/bacula
+
+    - name: Mover arquivos de configuração personalizados
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - { src: "/usr/src/backup/Bacula_Backup/bconsole.modelo.conf", dest: "/etc/bacula/bconsole.conf" }
+        - { src: "/usr/src/backup/Bacula_Backup/bacula-dir.modelo.conf", dest: "/etc/bacula/bacula-dir.conf" }
+
+    - name: Habilitar e iniciar o Bacula Director
+      service:
+        name: bacula-dir
+        enabled: yes
+        state: restarted
+
+    - name: Adicionar a chave pública do Baculum
+      apt_key:
+        url: "https://www.bacula.org/downloads/baculum/baculum.pub"
+        state: present
+
+    - name: Configurar o repositório do Baculum
+      block:
+        - name: Adicionar repositório principal
+          lineinfile:
+            path: /etc/apt/sources.list.d/baculum.list
+            line: "deb https://www.bacula.org/downloads/baculum/stable-11/debian bullseye main"
+
+        - name: Adicionar repositório de código-fonte
+          lineinfile:
+            path: /etc/apt/sources.list.d/baculum.list
+            line: "deb-src https://www.bacula.org/downloads/baculum/stable-11/debian bullseye main"
+
+    - name: Atualizar índice de pacotes
+      apt:
+        update_cache: yes
+
+    - name: Instalar dependências do PHP
+      apt:
+        name:
+          - apache2
+          - php
+          - libapache2-mod-php
+          - php-cli
+          - php-mbstring
+          - php-intl
+          - php-xml
+          - php-curl
+          - php-zip
+          - php-bcmath
+        state: present
+
+    - name: Instalar ferramentas adicionais
+      apt:
+        name:
+          - git
+          - unzip
+          - curl
+        state: present
+
+    - name: Instalar o Baculum
+      apt:
+        name:
+          - baculum-web-apache2
+          - baculum-api-apache2
+          - baculum-common
+        state: present
+
+    - name: Copiar arquivos de configuração do Baculum
+      command: cp -r /etc/baculum/* /var/www/html/
+
+    - name: Habilitar módulos e sites do Apache
+      block:
+        - name: Habilitar módulo rewrite
+          command: a2enmod rewrite
+
+        - name: Habilitar site baculum.conf
+          command: a2ensite baculum.conf
+
+        - name: Habilitar site baculum-web.conf
+          command: a2ensite baculum-web.conf
+
+        - name: Habilitar site baculum-api.conf
+          command: a2ensite baculum-api.conf
+
+    - name: Ajustar permissões do Baculum
+      file:
+        path: /var/www/html/
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Reiniciar o Apache
+      service:
+        name: apache2
+        state: restarted
+
+    
