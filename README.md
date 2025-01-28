@@ -16,17 +16,11 @@ Configuração pronta para uso com interface gráfica de gerenciamento.
 Como usar:
 Clone este repositório:
 
-bash
-Copiar
-Editar
-git clone https://github.com/caio2121/
-cd automation-playbooks
+git clone https://github.com/caio2121/AutomationWithAnsible.git
+cd AutomationWithAnsible/backup
 Execute o playbook no controlador Ansible:
 
-bash
-Copiar
-Editar
-ansible-playbook -i inventario fullbaculainstall.yml
+ansible-playbook -i definihost fullbaculainstall.yml
 Após a execução, o Bacula e o Baculum estarão configurados e prontos para uso.
 
 Sobre este Repositório
